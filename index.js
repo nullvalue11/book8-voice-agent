@@ -7,8 +7,8 @@ import fastifyWs from '@fastify/websocket';
 // Load environment variables from .env file
 dotenv.config();
 
-// Retrieve the OpenAI API key from environment variables.
-const { OPENAI_API_KEY } = process.env;
+// Retrieve the OpenAI API key and Book8 agent API key from environment variables.
+const { OPENAI_API_KEY, BOOK8_AGENT_API_KEY } = process.env;
 
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
@@ -50,13 +50,21 @@ fastify.get('/', async (request, reply) => {
 // Route for Twilio to handle incoming calls
 // <Say> punctuation to improve text-to-speech translation
 fastify.all('/incoming-call', async (request, reply) => {
+    // Capture caller phone number from Twilio request
+    const callerPhone = request.body?.From || request.query?.From || null;
+    
+    // Pass caller phone as query parameter to WebSocket connection
+    const streamUrl = callerPhone 
+        ? `wss://${request.headers.host}/media-stream?callerPhone=${encodeURIComponent(callerPhone)}`
+        : `wss://${request.headers.host}/media-stream`;
+    
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
                               <Say voice="Google.en-US-Chirp3-HD-Aoede">Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open A I Realtime API</Say>
                               <Pause length="1"/>
                               <Say voice="Google.en-US-Chirp3-HD-Aoede">O.K. you can start talking!</Say>
                               <Connect>
-                                  <Stream url="wss://${request.headers.host}/media-stream" />
+                                  <Stream url="${streamUrl}" />
                               </Connect>
                           </Response>`;
 
@@ -68,6 +76,9 @@ fastify.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
         console.log('Client connected');
 
+        // Extract caller phone from query parameters
+        const callerPhone = req.query?.callerPhone || null;
+        
         // Connection-specific state
         let streamSid = null;
         let latestMediaTimestamp = 0;
@@ -167,6 +178,62 @@ fastify.register(async (fastify) => {
             }
         };
 
+        // Handle book_appointment tool call
+        const handleBookAppointment = async (toolCall, conversationContextCallerPhone, responseId) => {
+            try {
+                const args = JSON.parse(toolCall.function.arguments);
+
+                const guestPhone =
+                    (args.guestPhone && args.guestPhone.trim()) ||
+                    (conversationContextCallerPhone || null);
+
+                const bookingPayload = {
+                    agentApiKey: BOOK8_AGENT_API_KEY,
+                    start: args.start,
+                    guestName: args.guestName,
+                    guestEmail: args.guestEmail,
+                    guestPhone
+                };
+
+                // Make API call to Book8
+                const apiResponse = await fetch('https://api.book8.com/api/agent/book', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(bookingPayload)
+                });
+
+                const result = await apiResponse.json();
+
+                // Submit tool output back to OpenAI
+                const submitToolOutput = {
+                    type: 'response.submit_tool_outputs',
+                    response_id: responseId,
+                    tool_outputs: [{
+                        tool_call_id: toolCall.id,
+                        output: JSON.stringify(result)
+                    }]
+                };
+
+                openAiWs.send(JSON.stringify(submitToolOutput));
+            } catch (error) {
+                console.error('Error handling book_appointment tool:', error);
+                
+                // Submit error as tool output
+                const submitToolOutput = {
+                    type: 'response.submit_tool_outputs',
+                    response_id: responseId,
+                    tool_outputs: [{
+                        tool_call_id: toolCall.id,
+                        output: JSON.stringify({ error: error.message })
+                    }]
+                };
+
+                openAiWs.send(JSON.stringify(submitToolOutput));
+            }
+        };
+
         // Open event for OpenAI WebSocket
         openAiWs.on('open', () => {
             console.log('Connected to the OpenAI Realtime API');
@@ -205,6 +272,19 @@ fastify.register(async (fastify) => {
 
                 if (response.type === 'input_audio_buffer.speech_started') {
                     handleSpeechStartedEvent();
+                }
+
+                // Handle tool calls (function calls)
+                // OpenAI Realtime API uses response.requires_action for tool calls
+                if (response.type === 'response.requires_action') {
+                    const toolCalls = response.response?.required_action?.submit_tool_outputs?.tool_calls || [];
+                    const responseId = response.response?.id;
+                    
+                    for (const toolCall of toolCalls) {
+                        if (toolCall.type === 'function' && toolCall.function?.name === 'book_appointment') {
+                            handleBookAppointment(toolCall, callerPhone, responseId);
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('Error processing OpenAI message:', error, 'Raw message:', data);
