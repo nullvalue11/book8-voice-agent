@@ -26,7 +26,8 @@ fastify.register(fastifyWs);
 const businessProfile = {
   businessName: process.env.BUSINESS_NAME || 'our business',
   location: process.env.BUSINESS_LOCATION || '',
-  servicesDescription: process.env.BUSINESS_SERVICES || 'various services'
+  servicesDescription: process.env.BUSINESS_SERVICES || 'various services',
+  defaultTimezone: process.env.BUSINESS_TIMEZONE || 'America/New_York'
 };
 const SYSTEM_MESSAGE = buildSystemPrompt(businessProfile);
 const VOICE = 'alloy';
