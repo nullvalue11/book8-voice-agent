@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
+import { buildSystemPrompt } from './agentConfig.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -21,7 +22,13 @@ fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
 // Constants
-const SYSTEM_MESSAGE = 'You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested about and is prepared to offer them facts. You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate.';
+// Build system prompt with business profile (can be customized with profile data)
+const businessProfile = {
+  businessName: process.env.BUSINESS_NAME || 'our business',
+  location: process.env.BUSINESS_LOCATION || '',
+  servicesDescription: process.env.BUSINESS_SERVICES || 'various services'
+};
+const SYSTEM_MESSAGE = buildSystemPrompt(businessProfile);
 const VOICE = 'alloy';
 const TEMPERATURE = 0.8; // Controls the randomness of the AI's responses
 const PORT = process.env.PORT || 5050; // Allow dynamic port assignment
