@@ -76,8 +76,13 @@ fastify.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
         console.log('Client connected');
 
-        // Extract caller phone from query parameters
+        // Extract caller phone from query parameters (passed from gateway)
         const callerPhone = req.query?.callerPhone || null;
+        
+        // Request body context for tool handlers (from gateway)
+        const requestBody = {
+            callerPhone: callerPhone
+        };
         
         // Connection-specific state
         let streamSid = null;
@@ -179,13 +184,14 @@ fastify.register(async (fastify) => {
         };
 
         // Handle book_appointment tool call
-        const handleBookAppointment = async (toolCall, conversationContextCallerPhone, responseId) => {
+        const handleBookAppointment = async (toolCall, responseId) => {
             try {
                 const args = JSON.parse(toolCall.function.arguments);
 
                 const guestPhone =
                     (args.guestPhone && args.guestPhone.trim()) ||
-                    (conversationContextCallerPhone || null);
+                    requestBody.callerPhone ||  // from gateway
+                    null;
 
                 const bookingPayload = {
                     agentApiKey: BOOK8_AGENT_API_KEY,
@@ -282,7 +288,7 @@ fastify.register(async (fastify) => {
                     
                     for (const toolCall of toolCalls) {
                         if (toolCall.type === 'function' && toolCall.function?.name === 'book_appointment') {
-                            handleBookAppointment(toolCall, callerPhone, responseId);
+                            handleBookAppointment(toolCall, responseId);
                         }
                     }
                 }
