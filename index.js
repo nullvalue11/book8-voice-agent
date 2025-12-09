@@ -23,17 +23,10 @@ fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
 // Constants
-// Build system prompt with business profile (can be customized with profile data)
-const businessProfile = {
-  businessName: process.env.BUSINESS_NAME || 'our business',
-  location: process.env.BUSINESS_LOCATION || '',
-  servicesDescription: process.env.BUSINESS_SERVICES || 'various services',
-  defaultTimezone: process.env.BUSINESS_TIMEZONE || 'America/New_York'
-};
-const SYSTEM_MESSAGE = buildSystemPrompt(businessProfile);
 const VOICE = 'alloy';
 const TEMPERATURE = 0.8; // Controls the randomness of the AI's responses
 const PORT = process.env.PORT || 5050; // Allow dynamic port assignment
+const DEFAULT_BUSINESS_HANDLE = process.env.DEFAULT_BUSINESS_HANDLE || 'waismofit';
 
 // List of Event Types to log to the console. See the OpenAI Realtime API Documentation: https://platform.openai.com/docs/api-reference/realtime
 const LOG_EVENT_TYPES = [
@@ -62,10 +55,15 @@ fastify.all('/incoming-call', async (request, reply) => {
     // Capture caller phone number from Twilio request
     const callerPhone = request.body?.From || request.query?.From || null;
     
-    // Pass caller phone as query parameter to WebSocket connection
-    const streamUrl = callerPhone 
-        ? `wss://${request.headers.host}/media-stream?callerPhone=${encodeURIComponent(callerPhone)}`
-        : `wss://${request.headers.host}/media-stream`;
+    // Get business handle from query parameter or body, default to env or waismofit
+    const handle = request.query?.handle || request.body?.handle || DEFAULT_BUSINESS_HANDLE;
+    
+    // Build query parameters for WebSocket connection
+    const params = new URLSearchParams();
+    if (callerPhone) params.append('callerPhone', callerPhone);
+    params.append('handle', handle);
+    
+    const streamUrl = `wss://${request.headers.host}/media-stream?${params.toString()}`;
     
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
@@ -85,8 +83,12 @@ fastify.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
         console.log('Client connected');
 
-        // Extract caller phone from query parameters (passed from gateway)
+        // Extract caller phone and business handle from query parameters
         const callerPhone = req.query?.callerPhone || null;
+        const handle = req.query?.handle || DEFAULT_BUSINESS_HANDLE;
+        
+        // Build system prompt for this business
+        const systemMessage = buildSystemPrompt(handle);
         
         // Request body context for tool handlers (from gateway)
         const requestBody = {
@@ -118,7 +120,7 @@ fastify.register(async (fastify) => {
                         input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
                         output: { format: { type: 'audio/pcmu' }, voice: VOICE },
                     },
-                    instructions: SYSTEM_MESSAGE,
+                    instructions: systemMessage,
                 },
             };
 

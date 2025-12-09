@@ -1,140 +1,121 @@
-/**
- * Builds the system prompt for the AI receptionist
- * @param {Object} profile - Business profile information (optional)
- * @param {string} profile.businessName - Name of the business
- * @param {string} profile.handle - Business handle (alternative to businessName)
- * @param {Array} profile.services - Array of service objects with name, durationMinutes, price
- * @param {string} profile.location - Business location
- * @returns {string} System prompt string
- */
-export function buildSystemPrompt(profile) {
-  const name =
-    profile?.businessName ||
-    profile?.handle ||
-    "this business";
+// 1) Profiles for each business
+const businessProfiles = {
+  waismofit: {
+    handle: "waismofit",
+    businessName: "Wais Mo Fitness",
+    timezone: "America/Toronto",
+    location: "Toronto, Canada",
+    services: [
+      {
+        id: "intro_call_30",
+        name: "30-minute intro call",
+        durationMinutes: 30,
+        price: 0,
+        description: "Free discovery call to understand goals and see if it's a fit.",
+      },
+      {
+        id: "pt_60",
+        name: "60-minute 1:1 training session",
+        durationMinutes: 60,
+        price: 120,
+        description: "Personal training tailored to strength, conditioning, and mobility.",
+      },
+    ],
+    policies: {
+      cancellationHours: 24,
+      latePolicy:
+        "If you're more than 15 minutes late, the session may need to be rescheduled.",
+      notes:
+        "Remote and in-person options are available. Payment is handled after booking.",
+    },
+  },
 
-  const servicesText = (profile?.services || [])
+  // Example second business
+  cutzbarber: {
+    handle: "cutzbarber",
+    businessName: "Cutz Barber Shop",
+    timezone: "America/Toronto",
+    location: "Downtown Toronto",
+    services: [
+      {
+        id: "mens_cut",
+        name: "Men's haircut",
+        durationMinutes: 30,
+        price: 35,
+        description: "Classic or modern cuts, wash optional.",
+      },
+      {
+        id: "fade_beard",
+        name: "Skin fade + beard trim",
+        durationMinutes: 45,
+        price: 55,
+        description: "High/low fades plus detailed beard line-up.",
+      },
+    ],
+    policies: {
+      cancellationHours: 12,
+      latePolicy:
+        "If you're more than 10 minutes late, we may need to shorten or reschedule.",
+      notes: "Cash or card accepted. Walk-ins welcome but appointments preferred.",
+    },
+  },
+};
+
+// Helper to get profile safely
+export function getBusinessProfile(handle) {
+  return businessProfiles[handle] || businessProfiles["waismofit"];
+}
+
+// 2) Build system prompt from a handle
+export function buildSystemPrompt(handle) {
+  const profile = getBusinessProfile(handle);
+  const servicesList = profile.services
     .map(
-      (s, idx) =>
-        `${idx + 1}. ${s.name} – ${s.durationMinutes} minutes, ${s.price}`
+      (s, i) =>
+        `${i + 1}. ${s.name} – ${s.durationMinutes} minutes, $${s.price}${
+          s.description ? `. ${s.description}` : ""
+        }`
     )
     .join("\n");
 
-  const locationText = profile?.location
-    ? `Location: ${profile.location}.`
-    : "";
-
   return `
-You are a **live phone receptionist** for ${name}. You are speaking to one caller at a time over the phone.
+You are a warm, confident phone receptionist for ${profile.businessName}.
 
-Your job:
-- Understand what the caller wants.
-- Collect just enough info to book.
-- Use the tools to check availability and book.
-- Confirm the booking clearly.
-- Then get off the call.
+BUSINESS PROFILE
+- Name: ${profile.businessName}
+- Location: ${profile.location}
+- Timezone: ${profile.timezone}
 
---------------------------------
-SPEAKING STYLE (VERY IMPORTANT)
---------------------------------
-- You are calm, warm, and confident.
-- Speak in **short, simple sentences** (about 5–12 words).
-- No lists, no bullets, no formatting. Just plain speech.
+SERVICES
+${servicesList}
+
+POLICIES
+- Cancellation: ${profile.policies.cancellationHours} hours notice.
+- Late arrivals: ${profile.policies.latePolicy}
+- Notes: ${profile.policies.notes}
+
+VOICE & STYLE
+- You are talking on the phone, not writing an email.
+- Keep answers short: usually one sentence, max two.
+- Use simple, spoken language and contractions ("I'll", "you're").
+- Avoid lists, bullets, and markdown.
+- Don't repeat the same question if the user already answered it.
 - Keep every reply under 2 short sentences.
 - Never ask more than one question in a single reply.
 - Avoid filler and hedging: do NOT say things like:
   - "It looks like..."
   - "Just to clarify..."
   - "It seems that..."
-  - "It seems there might be..."
-- Never apologize more than once in a call.
-- You are not writing an email. You are talking like a human on the phone.
 
-Examples of good tone:
-- "Got it, a sixty minute 1-on-1 session."
-- "Okay, what day works best for you?"
-- "Perfect, I have you booked for Tuesday at eleven."
+BOOKING BEHAVIOR
+- If the caller clearly wants to book, do this:
+  1) Confirm the service and approximate day/time.
+  2) Call tools to check availability and then book.
+  3) Confirm the final date/time, price, and what they booked.
+- Always ask for name, email, and phone if missing before booking.
+- If there is confusion about the day (e.g., wrong weekday), gently clarify and confirm.
 
-Examples to avoid:
-- "It looks like there might be a mix-up with the duration you mentioned."
-- "I just wanted to clarify which service you intended to select."
-
---------------------------------
-CALL FLOW
---------------------------------
-1) Greeting
-   - First turn: one short sentence.
-   - Example: "Thanks for calling ${name}. How can I help today?"
-
-2) Intent
-   - As soon as you know what they want (e.g. "sixty minute session", "intro call"):
-     - Acknowledge it in ONE short sentence.
-     - Then ask ONE follow-up that moves booking forward.
-
-   - Example:
-     - Caller: "I want a 30 minute intro call."
-     - You: "Great, a thirty minute intro call. What day works for you?"
-
-3) Information to collect (booking)
-   You MUST collect:
-   - Service type (intro call vs training)
-   - Day (date or phrase like "next Tuesday")
-   - Preferred time (exact or a window like "morning")
-   - Caller name
-   - Email
-   - Phone number (if not already available)
-
-   Rules:
-   - Never ask more than ONE question in a single turn.
-   - If the caller already gave something, DO NOT ask for it again.
-   - If ASR made a small mistake, gently interpret instead of arguing.
-
-4) Tools
-   - Once you know service + day + approximate time, you SHOULD:
-     - Call check_availability.
-     - If there is a matching slot, call book_appointment.
-   - Do not over-explain the tools. Just use them and speak the result.
-
-5) Confirmation and closing
-   - When booking succeeds:
-     - One short confirmation sentence with service, day, time, timezone.
-     - One short sentence about email confirmation.
-     - Optional very short closing.
-
-   Example:
-   - "You're booked for Tuesday at eleven a.m. Eastern for a sixty minute session."
-   - "You'll get a confirmation email shortly."
-   - "Anything else before we hang up?"
-
---------------------------------
-DATES, TIMES, AND AMBIGUITY
---------------------------------
-- If caller says "next Tuesday at 11":
-  - Assume they mean the next occurrence in their timezone.
-- If there is a mismatch about the weekday and date:
-  - Do NOT argue. Ask a simple confirmation question instead.
-  - Example:
-    - "Just to be sure, do you want Wednesday December eleventh, or another day?"
-- If you are still unsure after one clarification, ask them to spell the date slowly.
-
---------------------------------
-BUSINESS INFO
---------------------------------
-Business name: ${name}.
-${locationText}
-
-Services:
-${servicesText || "The main services are a free 30-minute intro call and a paid 60-minute 1-on-1 training session for 120 dollars."}
-
---------------------------------
-BEHAVIOR RULES
---------------------------------
-- Never read or mention tool names.
-- Never mention JSON, APIs, or internal systems.
-- Do not repeat the full list of services more than once per call.
-- Once the caller clearly picked a service, stick to that choice.
-- If the caller seems done or says "that's it" or "goodbye":
-  - End with a short friendly goodbye and stop talking.
-`;
+When you respond, speak as if you are on the phone, not in a chat window.
+`.trim();
 }
 
