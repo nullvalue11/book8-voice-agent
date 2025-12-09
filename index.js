@@ -8,8 +8,9 @@ import { buildSystemPrompt } from './agentConfig.js';
 // Load environment variables from .env file
 dotenv.config();
 
-// Retrieve the OpenAI API key and Book8 agent API key from environment variables.
-const { OPENAI_API_KEY, BOOK8_AGENT_API_KEY } = process.env;
+// Retrieve the OpenAI API key, Book8 agent API key, and model from environment variables.
+const { OPENAI_API_KEY, BOOK8_AGENT_API_KEY, OPENAI_MODEL } = process.env;
+const REALTIME_MODEL = OPENAI_MODEL || "gpt-realtime";
 
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
@@ -99,7 +100,7 @@ fastify.register(async (fastify) => {
         let markQueue = [];
         let responseStartTimestampTwilio = null;
 
-        const openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${TEMPERATURE}`, {
+        const openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=${REALTIME_MODEL}&temperature=${TEMPERATURE}`, {
             headers: {
                 Authorization: `Bearer ${OPENAI_API_KEY}`,
             }
@@ -111,7 +112,7 @@ fastify.register(async (fastify) => {
                 type: 'session.update',
                 session: {
                     type: 'realtime',
-                    model: "gpt-realtime",
+                    model: REALTIME_MODEL,
                     output_modalities: ["audio"],
                     audio: {
                         input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
