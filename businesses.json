@@ -1,0 +1,57 @@
+{
+  "waismofit": {
+    "handle": "waismofit",
+    "businessName": "Wais Mo Fitness",
+    "timezone": "America/Toronto",
+    "location": "Toronto, Canada",
+    "services": [
+      {
+        "id": "intro_call_30",
+        "name": "30-minute intro call",
+        "durationMinutes": 30,
+        "price": 0,
+        "description": "Free discovery call to understand goals and see if it's a fit."
+      },
+      {
+        "id": "pt_60",
+        "name": "60-minute 1:1 training session",
+        "durationMinutes": 60,
+        "price": 120,
+        "description": "Personal training tailored to strength, conditioning, and mobility."
+      }
+    ],
+    "policies": {
+      "cancellationHours": 24,
+      "latePolicy": "If you're more than 15 minutes late, the session may need to be rescheduled.",
+      "notes": "Remote and in-person options are available. Payment is handled after booking."
+    }
+  },
+  "cutzbarber": {
+    "handle": "cutzbarber",
+    "businessName": "Cutz Barber Shop",
+    "timezone": "America/Toronto",
+    "location": "Downtown Toronto",
+    "services": [
+      {
+        "id": "mens_cut",
+        "name": "Men's haircut",
+        "durationMinutes": 30,
+        "price": 35,
+        "description": "Classic or modern cuts, wash optional."
+      },
+      {
+        "id": "fade_beard",
+        "name": "Skin fade + beard trim",
+        "durationMinutes": 45,
+        "price": 55,
+        "description": "High/low fades plus detailed beard line-up."
+      }
+    ],
+    "policies": {
+      "cancellationHours": 12,
+      "latePolicy": "If you're more than 10 minutes late, we may need to shorten or reschedule.",
+      "notes": "Cash or card accepted. Walk-ins welcome but appointments preferred."
+    }
+  }
+}
+
