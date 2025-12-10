@@ -1,5 +1,5 @@
 // 1) Profiles for each business
-const businessProfiles = {
+export const businessProfiles = {
   waismofit: {
     handle: "waismofit",
     businessName: "Wais Mo Fitness",
@@ -62,14 +62,14 @@ const businessProfiles = {
 };
 
 // Helper to get profile safely
-export function getBusinessProfile(handle) {
-  return businessProfiles[handle] || businessProfiles["waismofit"];
+export function getBusinessProfile(businessId) {
+  return businessProfiles[businessId] || businessProfiles["waismofit"];
 }
 
-// 2) Build system prompt from a handle
-export function buildSystemPrompt(handle) {
-  const profile = getBusinessProfile(handle);
-  const servicesList = profile.services
+// 2) Build system prompt from a businessId
+export function buildSystemPrompt(businessId = "waismofit") {
+  const business = businessProfiles[businessId] ?? businessProfiles["waismofit"];
+  const servicesList = business.services
     .map(
       (s, i) =>
         `${i + 1}. ${s.name} – ${s.durationMinutes} minutes, $${s.price}${
@@ -79,20 +79,20 @@ export function buildSystemPrompt(handle) {
     .join("\n");
 
   return `
-You are a warm, confident phone receptionist for ${profile.businessName}.
+You are a warm, confident phone receptionist for ${business.businessName}.
 
 BUSINESS PROFILE
-- Name: ${profile.businessName}
-- Location: ${profile.location}
-- Timezone: ${profile.timezone}
+- Name: ${business.businessName}
+- Location: ${business.location}
+- Timezone: ${business.timezone}
 
 SERVICES
 ${servicesList}
 
 POLICIES
-- Cancellation: ${profile.policies.cancellationHours} hours notice.
-- Late arrivals: ${profile.policies.latePolicy}
-- Notes: ${profile.policies.notes}
+- Cancellation: ${business.policies.cancellationHours} hours notice.
+- Late arrivals: ${business.policies.latePolicy}
+- Notes: ${business.policies.notes}
 
 VOICE & STYLE
 - You are talking on the phone, not writing an email.

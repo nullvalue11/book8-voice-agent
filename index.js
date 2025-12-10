@@ -55,13 +55,15 @@ fastify.all('/incoming-call', async (request, reply) => {
     // Capture caller phone number from Twilio request
     const callerPhone = request.body?.From || request.query?.From || null;
     
-    // Get business handle from query parameter or body, default to env or waismofit
-    const handle = request.query?.handle || request.body?.handle || DEFAULT_BUSINESS_HANDLE;
+    // Get business ID from query parameter or body (supports both businessId and handle for compatibility)
+    const businessId = request.query?.businessId || request.body?.businessId || 
+                       request.query?.handle || request.body?.handle || 
+                       DEFAULT_BUSINESS_HANDLE;
     
     // Build query parameters for WebSocket connection
     const params = new URLSearchParams();
     if (callerPhone) params.append('callerPhone', callerPhone);
-    params.append('handle', handle);
+    params.append('businessId', businessId);
     
     const streamUrl = `wss://${request.headers.host}/media-stream?${params.toString()}`;
     
@@ -83,12 +85,12 @@ fastify.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
         console.log('Client connected');
 
-        // Extract caller phone and business handle from query parameters
+        // Extract caller phone and business ID from query parameters
         const callerPhone = req.query?.callerPhone || null;
-        const handle = req.query?.handle || DEFAULT_BUSINESS_HANDLE;
+        const businessId = req.query?.businessId || req.query?.handle || DEFAULT_BUSINESS_HANDLE;
         
         // Build system prompt for this business
-        const systemMessage = buildSystemPrompt(handle);
+        const systemMessage = buildSystemPrompt(businessId);
         
         // Request body context for tool handlers (from gateway)
         const requestBody = {
