@@ -3,23 +3,28 @@
 const BOOK8_CORE_API_URL = process.env.BOOK8_CORE_API_URL;
 
 export async function fetchBusinessById(id) {
-  if (!BOOK8_CORE_API_URL) return null;
+  if (!BOOK8_CORE_API_URL) return { business: null, is404: false };
   try {
     const r = await fetch(`${BOOK8_CORE_API_URL}/api/businesses/${encodeURIComponent(id)}`);
-    if (!r.ok) return null;
+    if (r.status === 404) {
+      return { business: null, is404: true };
+    }
+    if (!r.ok) {
+      return { business: null, is404: false };
+    }
     const json = await r.json();
     const business = json?.business || null;
     
     // Debug logging to prove DB is being used
     if (business) {
       const servicesCount = business.services?.length || 0;
-      console.log(`[agent] business=${business.id || id} name="${business.name || 'N/A'}" category=${business.category || 'N/A'} services=${servicesCount}`);
+      console.log(`[agent] Loaded business from core-api: id=${business.id || id} category=${business.category || 'N/A'} services=${servicesCount}`);
     }
     
-    return business;
+    return { business, is404: false };
   } catch (error) {
     console.error(`Error fetching business ${id}:`, error);
-    return null;
+    return { business: null, is404: false };
   }
 }
 
@@ -58,6 +63,15 @@ export const CATEGORY_TEMPLATES = {
     ],
     bookingStyle:
       "Confirm service type, stylist preference if relevant, and timing.",
+  },
+
+  other: {
+    categoryName: "General Business",
+    defaultGreeting:
+      "You've reached {businessName}, how can I help you today?",
+    defaultServices: [],
+    bookingStyle:
+      "Confirm service, date, and time before booking.",
   },
 
   // Add more as you go: dentist, clinics, home_services, etc.
@@ -110,18 +124,40 @@ export const BUSINESSES = {
 };
 
 export async function getBusinessProfile(handle) {
-  // Try to fetch from Core API first
-  let business = await fetchBusinessById(handle);
+  // Fetch from Core API
+  const { business, is404 } = await fetchBusinessById(handle);
   
-  // If API fetch fails, fallback to local BUSINESSES
-  if (!business) {
-    business = BUSINESSES[handle] || BUSINESSES["waismofit"];
+  // If 404, use "other" category template
+  if (is404) {
+    const categoryTemplate = CATEGORY_TEMPLATES["other"];
+    return {
+      ...categoryTemplate,
+      id: handle,
+      name: handle,
+      category: "other",
+      greeting: categoryTemplate.defaultGreeting.replace("{businessName}", handle),
+    };
   }
   
-  // Get category template (use business.category or default to fitness)
-  const category = business.category || "fitness";
+  // If API fetch fails (non-404), fallback to local BUSINESSES
+  if (!business) {
+    const fallbackBusiness = BUSINESSES[handle] || BUSINESSES["waismofit"];
+    const category = fallbackBusiness.category || "fitness";
+    const categoryTemplate = CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES["fitness"];
+    
+    return {
+      ...categoryTemplate,
+      ...fallbackBusiness,
+      greeting:
+        fallbackBusiness.greetingOverride ||
+        categoryTemplate.defaultGreeting.replace("{businessName}", fallbackBusiness.name || "this business"),
+    };
+  }
+  
+  // Get category template (use business.category or default to other)
+  const category = business.category || "other";
   const categoryTemplate =
-    CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES["fitness"];
+    CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES["other"];
 
   // Merge category template with business data
   const merged = {
