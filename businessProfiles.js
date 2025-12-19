@@ -8,7 +8,15 @@ export async function fetchBusinessById(id) {
     const r = await fetch(`${BOOK8_CORE_API_URL}/api/businesses/${encodeURIComponent(id)}`);
     if (!r.ok) return null;
     const json = await r.json();
-    return json?.business || null;
+    const business = json?.business || null;
+    
+    // Debug logging to prove DB is being used
+    if (business) {
+      const servicesCount = business.services?.length || 0;
+      console.log(`[agent] business=${business.id || id} name="${business.name || 'N/A'}" category=${business.category || 'N/A'} services=${servicesCount}`);
+    }
+    
+    return business;
   } catch (error) {
     console.error(`Error fetching business ${id}:`, error);
     return null;

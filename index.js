@@ -9,6 +9,7 @@ import { buildSystemPrompt } from './agentConfig.js';
 dotenv.config();
 
 // Retrieve the OpenAI API key, Book8 agent API key, and model from environment variables.
+// Note: Realtime API uses "gpt-realtime" model. For Chat Completions API, you could use "gpt-4o" or "gpt-4o-mini"
 const { OPENAI_API_KEY, BOOK8_AGENT_API_KEY, OPENAI_MODEL } = process.env;
 const REALTIME_MODEL = OPENAI_MODEL || "gpt-realtime";
 
