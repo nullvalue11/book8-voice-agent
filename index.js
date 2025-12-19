@@ -82,15 +82,22 @@ fastify.all('/incoming-call', async (request, reply) => {
 
 // WebSocket route for media-stream
 fastify.register(async (fastify) => {
-    fastify.get('/media-stream', { websocket: true }, (connection, req) => {
+    fastify.get('/media-stream', { websocket: true }, async (connection, req) => {
         console.log('Client connected');
 
         // Extract caller phone and business ID from query parameters
         const callerPhone = req.query?.callerPhone || null;
         const businessId = req.query?.businessId || req.query?.handle || DEFAULT_BUSINESS_HANDLE;
         
-        // Build system prompt for this business
-        const systemMessage = buildSystemPrompt(businessId);
+        // Build system prompt for this business (async - fetch from API)
+        let systemMessage = '';
+        try {
+            systemMessage = await buildSystemPrompt(businessId);
+        } catch (error) {
+            console.error('Error building system prompt:', error);
+            // Fallback to a default message if buildSystemPrompt fails
+            systemMessage = `You are a professional AI phone receptionist. Help callers book appointments.`;
+        }
         
         // Request body context for tool handlers (from gateway)
         const requestBody = {

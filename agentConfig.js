@@ -1,27 +1,37 @@
 // agentConfig.js (or wherever buildSystemPrompt lives)
 import { getBusinessProfile } from "./businessProfiles.js";
 
-export function buildSystemPrompt(handle) {
-  const profile = getBusinessProfile(handle);
+export async function buildSystemPrompt(handle) {
+  const profile = await getBusinessProfile(handle);
+
+  // Handle services from API (business.services) or category defaults
+  const services = profile.services || profile.defaultServices || [];
+  const servicesText = services
+    .map(s => {
+      const duration = s.duration || s.durationMinutes || 30;
+      return `- ${s.name} (${duration} minutes)`;
+    })
+    .join("\n");
+
+  // Use bookingSettings from API if available, otherwise use bookingStyle from category template
+  const bookingStyle = profile.bookingSettings || profile.bookingStyle || "Confirm service, date, and time before booking.";
 
   return `
-You are a professional AI phone receptionist for ${profile.name}.
+You are a professional AI phone receptionist for ${profile.name || "this business"}.
 
-Business category: ${profile.categoryName}.
+Business category: ${profile.categoryName || "General"}.
 
 Greeting:
-- Say: "${profile.greeting}"
+- Say: "${profile.greeting || "Thanks for calling. How can I help you today?"}"
 - Keep responses short, 1–2 sentences.
 - No markdown, no bullet lists, no emojis.
 - Speak like a human, not an email.
 
 Services offered:
-${(profile.services || profile.defaultServices || [])
-  .map(s => `- ${s.name} (${s.duration || s.durationMinutes || 30} minutes)`)
-  .join("\n")}
+${servicesText || "- No services configured"}
 
 Booking style:
-${profile.bookingStyle}
+${bookingStyle}
 
 Core rules:
 - Always confirm date, time, and service.

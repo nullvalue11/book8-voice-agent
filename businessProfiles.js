@@ -1,5 +1,20 @@
 // businessProfiles.js
 
+const BOOK8_CORE_API_URL = process.env.BOOK8_CORE_API_URL;
+
+export async function fetchBusinessById(id) {
+  if (!BOOK8_CORE_API_URL) return null;
+  try {
+    const r = await fetch(`${BOOK8_CORE_API_URL}/api/businesses/${encodeURIComponent(id)}`);
+    if (!r.ok) return null;
+    const json = await r.json();
+    return json?.business || null;
+  } catch (error) {
+    console.error(`Error fetching business ${id}:`, error);
+    return null;
+  }
+}
+
 export const CATEGORY_TEMPLATES = {
   fitness: {
     categoryName: "Fitness / Personal Training",
@@ -86,18 +101,32 @@ export const BUSINESSES = {
   // sparkle_car_wash: { id: "sparkle_car_wash", name: "Sparkle Car Wash", category: "car_wash", ... }
 };
 
-export function getBusinessProfile(handle) {
-  const business = BUSINESSES[handle] || BUSINESSES["waismofit"];
+export async function getBusinessProfile(handle) {
+  // Try to fetch from Core API first
+  let business = await fetchBusinessById(handle);
+  
+  // If API fetch fails, fallback to local BUSINESSES
+  if (!business) {
+    business = BUSINESSES[handle] || BUSINESSES["waismofit"];
+  }
+  
+  // Get category template (use business.category or default to fitness)
+  const category = business.category || "fitness";
   const categoryTemplate =
-    CATEGORY_TEMPLATES[business.category] || CATEGORY_TEMPLATES["fitness"];
+    CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES["fitness"];
 
-  return {
+  // Merge category template with business data
+  const merged = {
     ...categoryTemplate,
     ...business,
     // resolved greeting with {businessName}
     greeting:
       business.greetingOverride ||
-      categoryTemplate.defaultGreeting.replace("{businessName}", business.name),
+      categoryTemplate.defaultGreeting.replace("{businessName}", business.name || "this business"),
   };
+
+  return merged;
 }
+
+
 
