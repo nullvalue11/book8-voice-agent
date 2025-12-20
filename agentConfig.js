@@ -6,12 +6,9 @@ export async function buildSystemPrompt(handle) {
 
   // Handle services from API (business.services) or category defaults
   const services = profile.services || profile.defaultServices || [];
-  const servicesText = services
-    .map(s => {
-      const duration = s.duration || s.durationMinutes || 30;
-      return `- ${s.name} (${duration} minutes)`;
-    })
-    .join("\n");
+  const servicesSpoken = services.length
+    ? services.map(s => s.name).join(", ")
+    : "No services configured";
 
   // Use bookingSettings from API if available, otherwise use bookingStyle from category template
   const bookingStyle = profile.bookingSettings || profile.bookingStyle || "Confirm service, date, and time before booking.";
@@ -25,7 +22,9 @@ Rules (phone mode):
 - Speak in 1–2 short sentences.
 - No markdown. No bullets. No numbering. No "colon lists".
 - Ask one question at a time.
-- If user asks for services, answer in one sentence and ask "Which one?".
+- If the caller asks what you offer:
+  - Answer in ONE sentence using this list: ${servicesSpoken}.
+  - Then ask: "Which one would you like?"
 - Never repeat the full menu unless asked.
 
 Greeting (FIRST TURN ONLY):
@@ -37,9 +36,6 @@ Greeting (FIRST TURN ONLY):
 - Keep responses short, 1–2 sentences.
 - No markdown, no bullet lists, no emojis.
 - Speak like a human, not an email.
-
-Services offered:
-${servicesText || "- No services configured"}
 
 Booking style:
 ${bookingStyle}
