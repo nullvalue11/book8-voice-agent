@@ -50,6 +50,236 @@ fastify.get('/', async (request, reply) => {
     reply.send({ message: 'Twilio Media Stream Server is running!' });
 });
 
+// Tool definitions for Chat Completions API
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "check_availability",
+      description: "Check available appointment slots for a given date, timezone, and duration",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            type: "string",
+            description: "Date in ISO format (YYYY-MM-DD) or ISO datetime string"
+          },
+          timezone: {
+            type: "string",
+            description: "Timezone (e.g., America/Toronto, America/New_York)"
+          },
+          durationMinutes: {
+            type: "integer",
+            description: "Duration of the appointment in minutes"
+          }
+        },
+        required: ["date", "timezone", "durationMinutes"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "book_appointment",
+      description: "Book an appointment with the provided details",
+      parameters: {
+        type: "object",
+        properties: {
+          start: {
+            type: "string",
+            description: "Start time in ISO format (YYYY-MM-DDTHH:mm:ss)"
+          },
+          guestName: {
+            type: "string",
+            description: "Guest's full name"
+          },
+          guestEmail: {
+            type: "string",
+            description: "Guest's email address"
+          },
+          guestPhone: {
+            type: "string",
+            description: "Guest's phone number (optional, can be empty string)"
+          }
+        },
+        required: ["start", "guestName", "guestEmail"]
+      }
+    }
+  }
+];
+
+// REST endpoint for text-based chat
+fastify.post('/agent/chat', async (request, reply) => {
+  try {
+    const { messages, businessId, handle, callerPhone } = request.body;
+
+    // Validate messages array
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return reply.status(400).send({
+        ok: false,
+        error: "messages array is required and must not be empty"
+      });
+    }
+
+    // Get business ID (supports both businessId and handle)
+    const effectiveBusinessId = businessId || handle || DEFAULT_BUSINESS_HANDLE;
+
+    // Fetch business profile from core-api and build system prompt
+    const systemPrompt = await buildSystemPrompt(effectiveBusinessId);
+
+    // Prepare messages with system prompt
+    const chatMessages = [
+      { role: "system", content: systemPrompt },
+      ...messages
+    ];
+
+    // Add caller phone context if available
+    if (callerPhone) {
+      chatMessages.push({
+        role: "system",
+        content: `Caller phone number: ${callerPhone}`
+      });
+    }
+
+    // Call OpenAI Chat Completions API
+    const chatModel = process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini";
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: chatModel,
+        messages: chatMessages,
+        tools: TOOLS,
+        tool_choice: "auto",
+        temperature: TEMPERATURE
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('OpenAI API error:', error);
+      return reply.status(500).send({
+        ok: false,
+        error: "Failed to get response from AI"
+      });
+    }
+
+    const data = await response.json();
+    const assistantMessage = data.choices[0].message;
+
+    // Handle tool calls if present
+    if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+      const toolResults = [];
+
+      for (const toolCall of assistantMessage.tool_calls) {
+        if (toolCall.function.name === 'check_availability') {
+          const args = JSON.parse(toolCall.function.arguments);
+          // Call Book8 check_availability API
+          const checkResponse = await fetch('https://api.book8.com/api/agent/check-availability', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              agentApiKey: BOOK8_AGENT_API_KEY,
+              date: args.date,
+              timezone: args.timezone,
+              durationMinutes: args.durationMinutes
+            })
+          });
+          const checkResult = await checkResponse.json();
+          toolResults.push({
+            tool_call_id: toolCall.id,
+            role: "tool",
+            name: toolCall.function.name,
+            content: JSON.stringify(checkResult)
+          });
+        } else if (toolCall.function.name === 'book_appointment') {
+          const args = JSON.parse(toolCall.function.arguments);
+          
+          // Use callerPhone from request or args
+          const guestPhone =
+            (args.guestPhone && args.guestPhone.trim()) ||
+            callerPhone ||
+            null;
+
+          // Call Book8 book_appointment API
+          const bookResponse = await fetch('https://api.book8.com/api/agent/book', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              agentApiKey: BOOK8_AGENT_API_KEY,
+              start: args.start,
+              guestName: args.guestName,
+              guestEmail: args.guestEmail,
+              guestPhone
+            })
+          });
+          const bookResult = await bookResponse.json();
+          toolResults.push({
+            tool_call_id: toolCall.id,
+            role: "tool",
+            name: toolCall.function.name,
+            content: JSON.stringify(bookResult)
+          });
+        }
+      }
+
+      // Make second API call with tool results
+      const secondResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: chatModel,
+          messages: [
+            ...chatMessages,
+            assistantMessage,
+            ...toolResults
+          ],
+          tools: TOOLS,
+          tool_choice: "auto",
+          temperature: TEMPERATURE
+        })
+      });
+
+      const secondData = await secondResponse.json();
+      const finalMessage = secondData.choices[0].message;
+
+      return reply.send({
+        ok: true,
+        reply: finalMessage.content,
+        toolCalls: assistantMessage.tool_calls?.map(tc => ({
+          name: tc.function.name,
+          arguments: tc.function.arguments
+        })) || []
+      });
+    }
+
+    // No tool calls, return the response directly
+    return reply.send({
+      ok: true,
+      reply: assistantMessage.content,
+      toolCalls: []
+    });
+
+  } catch (error) {
+    console.error('Agent chat error:', error);
+    return reply.status(500).send({
+      ok: false,
+      reply: "I'm having trouble accessing the scheduling system right now. Please try again later.",
+      error: error.message
+    });
+  }
+});
+
 // Route for Twilio to handle incoming calls
 // <Say> punctuation to improve text-to-speech translation
 fastify.all('/incoming-call', async (request, reply) => {
