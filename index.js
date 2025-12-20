@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
 import { buildSystemPrompt } from './agentConfig.js';
+import { getBusinessProfile } from './businessProfiles.js';
+import { getCallState, upsertCallState, clearCallState } from './src/state/callState.js';
+import { extractFields } from './src/services/nluExtract.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -64,66 +67,99 @@ fastify.get('/health', async (request, reply) => {
  * {
  *   businessId: "waismofit",
  *   callSid: "...",
- *   messages: [{role:"user",content:"..."}, ...],
+ *   text: "user's message text",
+ *   messages: [{role:"user",content:"..."}, ...], // optional, for backward compatibility
  *   callerPhone: "+1...",
  *   toPhone: "+1..."
  * }
  */
 fastify.post('/api/agent-chat', async (request, reply) => {
   try {
-    const { businessId, callSid, messages } = request.body;
+    const { businessId, callSid, text, messages } = request.body;
 
     if (!businessId) {
       return reply.status(400).send({ ok: false, error: "businessId is required" });
     }
 
-    const userMessages = Array.isArray(messages) ? messages : [];
-
-    // Enforce "first turn greeting only" without relying on the model guessing:
-    const isFirstTurn = callSid ? !seenCallSids.has(callSid) : false;
-    if (callSid && isFirstTurn) seenCallSids.add(callSid);
-
-    // Build system prompt (your current buildSystemPrompt(handle))
-    let systemPrompt = await buildSystemPrompt(businessId);
-
-    // Add a hard flag that the model can't "forget"
-    systemPrompt += `\n\nConversation state:\n- firstTurn: ${isFirstTurn ? "true" : "false"}\n`;
-
-    // Compose final messages
-    const finalMessages = [
-      { role: "system", content: systemPrompt },
-      ...userMessages
-    ];
-
-    // Keep it short so it's faster + avoids rambling:
-    // (This matters for "laggy")
-    const chatModel = process.env.OPENAI_MODEL || "gpt-4o-mini-2024-07-18";
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: chatModel,
-        messages: finalMessages,
-        temperature: 0.4,
-        max_tokens: 120
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('[book8-voice-agent] /api/agent-chat OpenAI API error:', error);
-      return reply.status(500).send({ ok: false, error: "Internal server error" });
+    // Get user text from either 'text' field or last message
+    let userText = text;
+    if (!userText && Array.isArray(messages) && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      userText = lastMessage.content || lastMessage.text || '';
+    }
+    if (!userText) {
+      return reply.status(400).send({ ok: false, error: "text or messages with content is required" });
     }
 
-    const completion = await response.json();
-    const replyText =
-      completion?.choices?.[0]?.message?.content?.trim() ||
-      "Sorry—can you say that again?";
+    // Load business profile
+    const profile = await getBusinessProfile(businessId);
+    const services = profile.services || profile.defaultServices || [];
 
-    return reply.send({ ok: true, reply: replyText, raw: completion });
+    // Load per-call state
+    const state = getCallState(callSid) || {
+      step: "greeting",          // greeting | service | datetime | contact | confirm | done
+      service: null,
+      date: null,
+      time: null,
+      name: null,
+      email: null,
+      phone: null
+    };
+
+    // Run NLU extraction
+    const extracted = await extractFields({
+      businessName: profile.name || businessId,
+      services,
+      userText
+    });
+
+    // Merge extracted into state (only overwrite if value exists)
+    const next = upsertCallState(callSid, {
+      step: state.step,
+      service: extracted.service ?? state.service,
+      date: extracted.date ?? state.date,
+      time: extracted.time ?? state.time,
+      name: extracted.name ?? state.name,
+      email: extracted.email ?? state.email,
+      phone: extracted.phone ?? state.phone
+    });
+
+    // Deterministic conversation flow:
+
+    // 1) If user asked services:
+    if (extracted.intent === "ask_services") {
+      const short = services.slice(0, 2).map(s => s.name).join(" or ");
+      return reply.send({ ok: true, reply: `We offer ${short}. Which one would you like?` });
+    }
+
+    // 2) If no service selected:
+    if (!next.service) {
+      const serviceOptions = services.slice(0, 2).map(s => s.name).join(" or ");
+      return reply.send({ ok: true, reply: `Sure. Do you want ${serviceOptions}?` });
+    }
+
+    // 3) Need date/time:
+    if (!next.date || !next.time) {
+      return reply.send({ ok: true, reply: `Great. What day and time works for you?` });
+    }
+
+    // 4) Need contact:
+    if (!next.name || (!next.email && !next.phone)) {
+      return reply.send({ ok: true, reply: `Perfect. What's your name, and can I get your email or phone number?` });
+    }
+
+    // 5) Now you can book:
+    // -> call check_availability then book_appointment
+    // -> confirm then clearCallState(callSid)
+    
+    // For now, return a confirmation message
+    // TODO: Implement actual booking logic here
+    const bookingMessage = `Perfect! I have ${next.service} on ${next.date} at ${next.time} for ${next.name}. Let me book that for you now.`;
+    
+    // After booking is complete, clear the state
+    // clearCallState(callSid);
+    
+    return reply.send({ ok: true, reply: bookingMessage, state: next });
   } catch (err) {
     console.error('[book8-voice-agent] /api/agent-chat error:', err);
     return reply.status(500).send({ ok: false, error: "Internal server error" });
