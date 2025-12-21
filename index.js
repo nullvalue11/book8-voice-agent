@@ -7,6 +7,7 @@ import { buildSystemPrompt } from './agentConfig.js';
 import { getBusinessProfile } from './businessProfiles.js';
 import { getCallState, upsertCallState, clearCallState } from './src/state/callState.js';
 import { extractFields } from './src/services/nluExtract.js';
+import { bestEffortPost } from './src/utils/bestEffortPost.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -56,6 +57,64 @@ fastify.get('/', async (request, reply) => {
 // Optional: track "first turn" by CallSid to enforce greeting rule
 const seenCallSids = new Set();
 
+// Track turn index per call for deterministic IDs
+const callTurnIndices = new Map();
+
+// Get or increment turn index for a call
+function getTurnIndex(callSid) {
+  if (!callSid) return 0;
+  const current = callTurnIndices.get(callSid) || 0;
+  callTurnIndices.set(callSid, current + 1);
+  return current;
+}
+
+// Get Core API URL for internal endpoints
+const CORE_API_URL = process.env.CORE_API_URL || process.env.BOOK8_CORE_API_URL || 'https://book8-core-api.onrender.com';
+
+// Helper functions for booking tools
+async function callCheckAvailability({ date, timezone, durationMinutes }) {
+  try {
+    const response = await fetch('https://api.book8.com/api/agent/check-availability', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        agentApiKey: BOOK8_AGENT_API_KEY,
+        date,
+        timezone,
+        durationMinutes
+      })
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('[callCheckAvailability] Error:', error);
+    return { available: false, error: error.message };
+  }
+}
+
+async function callBookAppointment({ start, guestName, guestEmail, guestPhone }) {
+  try {
+    const response = await fetch('https://api.book8.com/api/agent/book', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        agentApiKey: BOOK8_AGENT_API_KEY,
+        start,
+        guestName,
+        guestEmail,
+        guestPhone: guestPhone || null
+      })
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('[callBookAppointment] Error:', error);
+    return { ok: false, error: error.message };
+  }
+}
+
 // Health check endpoint
 fastify.get('/health', async (request, reply) => {
     return reply.send({ ok: true, service: "book8-voice-agent" });
@@ -89,6 +148,21 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     }
     if (!userText) {
       return reply.status(400).send({ ok: false, error: "text or messages with content is required" });
+    }
+
+    // Get turn index for this call
+    const turnIndex = getTurnIndex(callSid);
+
+    // A) Transcript event - caller turn
+    if (callSid) {
+      bestEffortPost(`${CORE_API_URL}/internal/calls/transcript`, {
+        eventId: `${callSid}:caller:${turnIndex}`,
+        callSid,
+        role: 'caller',
+        text: userText,
+        turnIndex,
+        timestamp: new Date().toISOString()
+      }).catch(() => {}); // Already logged in bestEffortPost
     }
 
     // Load business profile
@@ -126,40 +200,116 @@ fastify.post('/api/agent-chat', async (request, reply) => {
 
     // Deterministic conversation flow:
 
+    let replyText = '';
+    let toolEvents = [];
+
     // 1) If user asked services:
     if (extracted.intent === "ask_services") {
       const short = services.slice(0, 2).map(s => s.name).join(" or ");
-      return reply.send({ ok: true, reply: `We offer ${short}. Which one would you like?` });
+      replyText = `We offer ${short}. Which one would you like?`;
     }
-
     // 2) If no service selected:
-    if (!next.service) {
+    else if (!next.service) {
       const serviceOptions = services.slice(0, 2).map(s => s.name).join(" or ");
-      return reply.send({ ok: true, reply: `Sure. Do you want ${serviceOptions}?` });
+      replyText = `Sure. Do you want ${serviceOptions}?`;
     }
-
     // 3) Need date/time:
-    if (!next.date || !next.time) {
-      return reply.send({ ok: true, reply: `Great. What day and time works for you?` });
+    else if (!next.date || !next.time) {
+      replyText = `Great. What day and time works for you?`;
     }
-
     // 4) Need contact:
-    if (!next.name || (!next.email && !next.phone)) {
-      return reply.send({ ok: true, reply: `Perfect. What's your name, and can I get your email or phone number?` });
+    else if (!next.name || (!next.email && !next.phone)) {
+      replyText = `Perfect. What's your name, and can I get your email or phone number?`;
+    }
+    // 5) Now you can book:
+    else {
+      const serviceDuration = services.find(s => s.name === next.service)?.duration || 30;
+      const timezone = next.timezone || profile.timezone || 'America/Toronto';
+      
+      // Call check_availability
+      const checkResult = await callCheckAvailability({
+        date: next.date,
+        timezone: timezone,
+        durationMinutes: serviceDuration
+      });
+
+      // C) Tool event - check_availability
+      if (callSid) {
+        const toolIndex = toolEvents.length;
+        const toolEventId = `${callSid}:tool:check_availability:${toolIndex}`;
+        toolEvents.push({ eventId: toolEventId, toolName: 'check_availability' });
+        
+        bestEffortPost(`${CORE_API_URL}/internal/calls/tool`, {
+          eventId: toolEventId,
+          callSid,
+          toolName: 'check_availability',
+          toolIndex,
+          input: { date: next.date, timezone, durationMinutes: serviceDuration },
+          output: checkResult,
+          timestamp: new Date().toISOString()
+        }).catch(() => {});
+      }
+
+      // If availability check succeeded, book the appointment
+      if (checkResult && checkResult.available) {
+        const bookingResult = await callBookAppointment({
+          start: `${next.date}T${next.time}`,
+          guestName: next.name,
+          guestEmail: next.email,
+          guestPhone: next.phone
+        });
+
+        // C) Tool event - book_appointment
+        if (callSid) {
+          const toolIndex = toolEvents.length;
+          const toolEventId = `${callSid}:tool:book_appointment:${toolIndex}`;
+          toolEvents.push({ eventId: toolEventId, toolName: 'book_appointment' });
+          
+          bestEffortPost(`${CORE_API_URL}/internal/calls/tool`, {
+            eventId: toolEventId,
+            callSid,
+            toolName: 'book_appointment',
+            toolIndex,
+            input: { start: `${next.date}T${next.time}`, guestName: next.name, guestEmail: next.email, guestPhone: next.phone },
+            output: bookingResult,
+            timestamp: new Date().toISOString()
+          }).catch(() => {});
+        }
+
+        if (bookingResult && bookingResult.ok) {
+          replyText = `Perfect! I've booked ${next.service} on ${next.date} at ${next.time} for ${next.name}. You'll receive a confirmation shortly.`;
+          clearCallState(callSid);
+        } else {
+          replyText = `I'm having trouble booking that right now. Please try again or contact us directly.`;
+        }
+      } else {
+        replyText = `I'm sorry, that time slot isn't available. Would you like to try a different day or time?`;
+      }
     }
 
-    // 5) Now you can book:
-    // -> call check_availability then book_appointment
-    // -> confirm then clearCallState(callSid)
+    // A) Transcript event - agent reply
+    if (callSid && replyText) {
+      bestEffortPost(`${CORE_API_URL}/internal/calls/transcript`, {
+        eventId: `${callSid}:agent:${turnIndex}`,
+        callSid,
+        role: 'agent',
+        text: replyText,
+        turnIndex,
+        timestamp: new Date().toISOString()
+      }).catch(() => {});
+    }
+
+    // C) Usage deltas - LLM tokens and TTS characters
+    if (callSid && replyText) {
+      bestEffortPost(`${CORE_API_URL}/internal/calls/usage`, {
+        callSid,
+        llmTokens: llmTokens,
+        ttsCharacters: replyText.length,
+        timestamp: new Date().toISOString()
+      }).catch(() => {});
+    }
     
-    // For now, return a confirmation message
-    // TODO: Implement actual booking logic here
-    const bookingMessage = `Perfect! I have ${next.service} on ${next.date} at ${next.time} for ${next.name}. Let me book that for you now.`;
-    
-    // After booking is complete, clear the state
-    // clearCallState(callSid);
-    
-    return reply.send({ ok: true, reply: bookingMessage, state: next });
+    return reply.send({ ok: true, reply: replyText, state: next });
   } catch (err) {
     console.error('[book8-voice-agent] /api/agent-chat error:', err);
     return reply.status(500).send({ ok: false, error: "Internal server error" });

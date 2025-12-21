@@ -93,7 +93,14 @@ Return ONLY JSON that matches the schema.
     const outputText = data.choices[0].message.content;
     
     // Parse the JSON response
-    return JSON.parse(outputText);
+    const result = JSON.parse(outputText);
+    
+    // Attach usage data if available
+    if (data.usage) {
+      result._usage = data.usage;
+    }
+    
+    return result;
   } catch (error) {
     console.error('[nluExtract] Error:', error);
     // Return default structure on error
