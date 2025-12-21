@@ -186,6 +186,13 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       services,
       userText
     });
+    
+    // Track LLM usage from NLU extraction
+    let llmTokens = 0;
+    if (extracted._usage) {
+      llmTokens = (extracted._usage.prompt_tokens || 0) + (extracted._usage.completion_tokens || 0);
+      delete extracted._usage; // Remove from extracted data
+    }
 
     // Merge extracted into state (only overwrite if value exists)
     const next = upsertCallState(callSid, {
