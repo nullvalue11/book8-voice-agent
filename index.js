@@ -153,10 +153,10 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     // Get turn index for this call
     const turnIndex = getTurnIndex(callSid);
 
-    // A) Transcript event - caller turn
+    // 1️⃣ Transcript event - caller turn (STT result)
     if (callSid) {
       bestEffortPost(`${CORE_API_URL}/internal/calls/transcript`, {
-        eventId: `${callSid}:caller:${turnIndex}`,
+        turnId: `${callSid}:caller:${turnIndex}`,
         callSid,
         role: 'caller',
         text: userText,
@@ -240,7 +240,7 @@ fastify.post('/api/agent-chat', async (request, reply) => {
         durationMinutes: serviceDuration
       });
 
-      // C) Tool event - check_availability
+      // 2️⃣ Tool event - check_availability
       if (callSid) {
         const toolIndex = toolEvents.length;
         const toolEventId = `${callSid}:tool:check_availability:${toolIndex}`;
@@ -266,7 +266,7 @@ fastify.post('/api/agent-chat', async (request, reply) => {
           guestPhone: next.phone
         });
 
-        // C) Tool event - book_appointment
+        // 2️⃣ Tool event - book_appointment
         if (callSid) {
           const toolIndex = toolEvents.length;
           const toolEventId = `${callSid}:tool:book_appointment:${toolIndex}`;
@@ -294,10 +294,10 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       }
     }
 
-    // A) Transcript event - agent reply
+    // 1️⃣ Transcript event - agent reply
     if (callSid && replyText) {
       bestEffortPost(`${CORE_API_URL}/internal/calls/transcript`, {
-        eventId: `${callSid}:agent:${turnIndex}`,
+        turnId: `${callSid}:agent:${turnIndex}`,
         callSid,
         role: 'agent',
         text: replyText,
@@ -306,12 +306,12 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       }).catch(() => {});
     }
 
-    // C) Usage deltas - LLM tokens and TTS characters
+    // 3️⃣ Usage deltas - LLM tokens and TTS characters (MVP-accurate)
     if (callSid && replyText) {
       bestEffortPost(`${CORE_API_URL}/internal/calls/usage`, {
         callSid,
-        llmTokens: llmTokens,
-        ttsCharacters: replyText.length,
+        llmTokens: llmTokens, // From OpenAI response usage
+        ttsCharacters: replyText.length, // replyText.length
         timestamp: new Date().toISOString()
       }).catch(() => {});
     }
