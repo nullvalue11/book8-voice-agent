@@ -170,8 +170,21 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       }).catch(() => {}); // Already logged in bestEffortPost
     }
 
-    // Load business profile
-    const profile = await getBusinessProfile(businessId);
+    // Load business profile (with error handling)
+    let profile;
+    try {
+      profile = await getBusinessProfile(businessId);
+    } catch (error) {
+      console.error('[agent-chat] Error loading business profile:', error);
+      // Use a minimal fallback profile
+      profile = {
+        name: businessId,
+        services: [],
+        defaultServices: [],
+        timezone: 'America/Toronto'
+      };
+    }
+    
     const services = profile.services || profile.defaultServices || [];
 
     // Load per-call state
@@ -185,12 +198,29 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       phone: null
     };
 
-    // Run NLU extraction
-    const extracted = await extractFields({
-      businessName: profile.name || businessId,
-      services,
-      userText
-    });
+    // Run NLU extraction (with error handling)
+    let extracted;
+    try {
+      extracted = await extractFields({
+        businessName: profile.name || businessId,
+        services,
+        userText
+      });
+    } catch (error) {
+      console.error('[agent-chat] Error in NLU extraction:', error);
+      // Use default extraction on error
+      extracted = {
+        intent: "other",
+        service: null,
+        date: null,
+        time: null,
+        timezone: null,
+        name: null,
+        email: null,
+        phone: null,
+        confirmation: null
+      };
+    }
     
     // Track LLM usage from NLU extraction
     let llmTokens = 0;
@@ -235,7 +265,8 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     }
     // 5) Now you can book:
     else {
-      const serviceDuration = services.find(s => s.name === next.service)?.duration || 30;
+      const serviceDuration = services.find(s => s.name === next.service)?.durationMinutes || 
+                               services.find(s => s.name === next.service)?.duration || 30;
       const timezone = next.timezone || profile.timezone || 'America/Toronto';
       
       // Call check_availability
@@ -324,7 +355,34 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     return reply.send({ ok: true, reply: replyText, state: next });
   } catch (err) {
     console.error('[book8-voice-agent] /api/agent-chat error:', err);
-    return reply.status(500).send({ ok: false, error: "Internal server error" });
+    console.error('[book8-voice-agent] Error stack:', err.stack);
+    
+    // Return a user-friendly error message instead of crashing
+    const errorReply = "I'm having trouble accessing the scheduling system right now. Please try again later.";
+    
+    // Try to emit error transcript if we have callSid
+    try {
+      const { callSid } = request.body || {};
+      if (callSid) {
+        const turnIndex = getTurnIndex(callSid);
+        bestEffortPost(`${CORE_API_URL}/internal/calls/transcript`, {
+          turnId: `${callSid}:agent:${turnIndex}`,
+          callSid,
+          role: 'agent',
+          text: errorReply,
+          turnIndex,
+          timestamp: new Date().toISOString()
+        }).catch(() => {});
+      }
+    } catch (transcriptError) {
+      console.error('[book8-voice-agent] Error emitting error transcript:', transcriptError);
+    }
+    
+    return reply.status(500).send({ 
+      ok: false, 
+      reply: errorReply,
+      error: err.message 
+    });
   }
 });
 

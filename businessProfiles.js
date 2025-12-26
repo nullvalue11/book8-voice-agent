@@ -98,21 +98,75 @@ export const BUSINESSES = {
 };
 
 export async function getBusinessProfile(handle) {
-  // 1) Fetch business record from core API
-  const resp = await fetch(`${CORE_API_URL}/api/businesses/${handle}`);
-  const json = await resp.json();
-  if (!json.ok) throw new Error(json.error || "Failed to fetch business");
+  if (!CORE_API_URL) {
+    // Fallback to local businesses if no API URL
+    const fallbackBusiness = BUSINESSES[handle] || BUSINESSES["waismofit"];
+    const category = fallbackBusiness.category || "fitness";
+    const categoryTemplate = CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES["fitness"];
+    return {
+      ...categoryTemplate,
+      ...fallbackBusiness,
+      greeting: fallbackBusiness.greetingOverride || categoryTemplate.defaultGreeting.replace("{businessName}", fallbackBusiness.name || "this business"),
+    };
+  }
 
-  const business = json.business;
+  try {
+    // 1) Fetch business record from core API
+    const resp = await fetch(`${CORE_API_URL}/api/businesses/${handle}`);
+    
+    if (resp.status === 404) {
+      // Business not found - use "other" category template
+      const categoryTemplate = CATEGORY_TEMPLATES["other"];
+      return {
+        ...categoryTemplate,
+        id: handle,
+        name: handle,
+        category: "other",
+        greeting: categoryTemplate.defaultGreeting.replace("{businessName}", handle),
+      };
+    }
 
-  // 2) Merge with category template defaults (still fine to keep templates locally)
-  const template = CATEGORY_TEMPLATES[business.category] || CATEGORY_TEMPLATES.other;
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    }
 
-  return {
-    ...template,
-    ...business,
-    categoryName: template.categoryName
-  };
+    const json = await resp.json();
+    if (!json.ok || !json.business) {
+      throw new Error(json.error || "Failed to fetch business");
+    }
+
+    const business = json.business;
+
+    // 2) Merge with category template defaults
+    const category = business.category || "other";
+    const template = CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES.other;
+
+    // Normalize duration to durationMinutes for services
+    const normalizedServices = (business.services || []).map(s => ({
+      ...s,
+      duration: s.duration || s.durationMinutes || 30,
+      durationMinutes: s.durationMinutes || s.duration || 30
+    }));
+
+    return {
+      ...template,
+      ...business,
+      services: normalizedServices.length > 0 ? normalizedServices : template.defaultServices,
+      categoryName: template.categoryName,
+      greeting: business.greetingOverride || template.defaultGreeting.replace("{businessName}", business.name || "this business"),
+    };
+  } catch (error) {
+    console.error(`[getBusinessProfile] Error fetching business ${handle}:`, error);
+    // Fallback to local businesses on error
+    const fallbackBusiness = BUSINESSES[handle] || BUSINESSES["waismofit"];
+    const category = fallbackBusiness.category || "fitness";
+    const categoryTemplate = CATEGORY_TEMPLATES[category] || CATEGORY_TEMPLATES["fitness"];
+    return {
+      ...categoryTemplate,
+      ...fallbackBusiness,
+      greeting: fallbackBusiness.greetingOverride || categoryTemplate.defaultGreeting.replace("{businessName}", fallbackBusiness.name || "this business"),
+    };
+  }
 }
 
 
