@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
+import fastifyCors from '@fastify/cors';
 import { buildSystemPrompt } from './agentConfig.js';
 import { getBusinessProfile } from './businessProfiles.js';
 import { getCallState, upsertCallState, clearCallState } from './src/state/callState.js';
@@ -26,6 +27,10 @@ if (!OPENAI_API_KEY) {
 const fastify = Fastify();
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
+fastify.register(fastifyCors, {
+    origin: true, // Allow all origins
+    credentials: true
+});
 
 // Constants
 const VOICE = 'alloy';
