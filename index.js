@@ -363,9 +363,30 @@ fastify.post('/api/agent-chat', async (request, reply) => {
         services,
         userText
       });
+      
+      // Ensure extracted is an object
+      if (!extracted || typeof extracted !== 'object') {
+        throw new Error('extractFields returned invalid result');
+      }
     } catch (error) {
-      console.error('[agent-chat] Error in NLU extraction:', error);
+      console.error(`[${requestId}] [agent-chat] Error in NLU extraction:`, error);
       // Use default extraction on error
+      extracted = {
+        intent: "other",
+        service: null,
+        date: null,
+        time: null,
+        timezone: null,
+        name: null,
+        email: null,
+        phone: null,
+        confirmation: null
+      };
+    }
+    
+    // Ensure extracted is always an object (safety check)
+    if (!extracted || typeof extracted !== 'object') {
+      console.error(`[${requestId}] [agent-chat] extracted is invalid, using defaults`);
       extracted = {
         intent: "other",
         service: null,
@@ -387,14 +408,15 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     }
 
     // Merge extracted into state (only overwrite if value exists)
+    // Use nullish coalescing with explicit null checks
     const next = upsertCallState(callSid, {
       step: state.step,
-      service: extracted.service ?? state.service,
-      date: extracted.date ?? state.date,
-      time: extracted.time ?? state.time,
-      name: extracted.name ?? state.name,
-      email: extracted.email ?? state.email,
-      phone: extracted.phone ?? state.phone
+      service: (extracted && extracted.service !== undefined) ? extracted.service : state.service,
+      date: (extracted && extracted.date !== undefined) ? extracted.date : state.date,
+      time: (extracted && extracted.time !== undefined) ? extracted.time : state.time,
+      name: (extracted && extracted.name !== undefined) ? extracted.name : state.name,
+      email: (extracted && extracted.email !== undefined) ? extracted.email : state.email,
+      phone: (extracted && extracted.phone !== undefined) ? extracted.phone : state.phone
     });
 
     // Deterministic conversation flow:
