@@ -235,10 +235,6 @@ async function callBookAppointment({ start, guestName, guestEmail, guestPhone })
   }
 }
 
-// Health check endpoint
-fastify.get('/health', async (request, reply) => {
-    return reply.send({ ok: true, service: "book8-voice-agent" });
-});
 
 /**
  * POST /api/agent-chat
