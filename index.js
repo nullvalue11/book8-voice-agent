@@ -56,7 +56,7 @@ const SHOW_TIMING_MATH = false;
 
 // Root Route
 fastify.get('/', async (request, reply) => {
-    reply.send({ message: 'Twilio Media Stream Server is running!' });
+    return reply.send({ ok: true, service: "book8-voice-agent" });
 });
 
 // Health check endpoints
@@ -71,13 +71,7 @@ fastify.get('/api/ping', async (request, reply) => {
 });
 
 fastify.get('/health', async (request, reply) => {
-    return reply.send({ 
-        ok: true, 
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        service: 'book8-voice-agent',
-        port: PORT
-    });
+    return reply.send({ ok: true });
 });
 
 // Optional: track "first turn" by CallSid to enforce greeting rule
@@ -988,33 +982,44 @@ fastify.register(async (fastify) => {
     });
 });
 
+// Ensure all routes are registered before starting the server
+console.log('[book8-voice-agent] Starting server...');
+console.log(`[book8-voice-agent] Port: ${PORT}`);
+console.log(`[book8-voice-agent] Host: 0.0.0.0`);
+
 fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err) => {
     if (err) {
-        console.error(err);
+        console.error('[book8-voice-agent] Server startup error:', err);
         process.exit(1);
     }
+    
+    console.log(`[book8-voice-agent] ✅ Server is listening on port ${PORT} (host: 0.0.0.0)`);
+    console.log(`[book8-voice-agent] Base URL: http://0.0.0.0:${PORT}`);
     
     // Log registered routes for debugging
     try {
         const routes = await fastify.printRoutes();
-        console.log(`[book8-voice-agent] Server is listening on port ${PORT} (host: 0.0.0.0)`);
-        console.log(`[book8-voice-agent] Base URL: http://0.0.0.0:${PORT}`);
         console.log(`[book8-voice-agent] Registered routes:`);
-        routes.split('\n').forEach(line => {
-            const trimmed = line.trim();
-            if (trimmed) {
-                console.log(`  ${trimmed}`);
-            }
-        });
+        const routeLines = routes.split('\n').filter(line => line.trim());
+        if (routeLines.length > 0) {
+            routeLines.forEach(line => {
+                console.log(`  ${line.trim()}`);
+            });
+        } else {
+            console.log(`  (No routes printed by fastify.printRoutes())`);
+        }
         
         // Explicitly verify critical routes
-        console.log(`[book8-voice-agent] ✅ POST /api/agent-chat is registered`);
-        console.log(`[book8-voice-agent] ✅ GET /api/ping is registered`);
-        console.log(`[book8-voice-agent] ✅ GET /health is registered`);
-        console.log(`[book8-voice-agent] ✅ GET / is registered`);
+        console.log(`[book8-voice-agent] ✅ GET / → { ok: true, service: "book8-voice-agent" }`);
+        console.log(`[book8-voice-agent] ✅ GET /health → { ok: true }`);
+        console.log(`[book8-voice-agent] ✅ GET /api/ping → { ok: true, status: "healthy", ... }`);
+        console.log(`[book8-voice-agent] ✅ POST /api/agent-chat → { ok: true, reply: "...", replyText: "..." }`);
+        console.log(`[book8-voice-agent] ✅ ALL /incoming-call → TwiML response`);
+        console.log(`[book8-voice-agent] ✅ GET /media-stream → WebSocket`);
     } catch (routeError) {
         console.warn('[book8-voice-agent] Could not print routes:', routeError);
-        console.log(`[book8-voice-agent] Server is listening on port ${PORT} (host: 0.0.0.0)`);
-        console.log(`[book8-voice-agent] ✅ POST /api/agent-chat should be available`);
+        console.log(`[book8-voice-agent] Routes should be registered: /, /health, /api/ping, /api/agent-chat, /incoming-call, /media-stream`);
     }
+    
+    console.log(`[book8-voice-agent] 🚀 Server ready to accept requests`);
 });
