@@ -59,6 +59,47 @@ fastify.get('/', async (request, reply) => {
     reply.send({ message: 'Twilio Media Stream Server is running!' });
 });
 
+// Health check endpoints
+fastify.get('/api/ping', async (request, reply) => {
+    return reply.send({ 
+        ok: true, 
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        service: 'book8-voice-agent',
+        port: PORT
+    });
+});
+
+fastify.get('/health', async (request, reply) => {
+    return reply.send({ 
+        ok: true, 
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        service: 'book8-voice-agent',
+        port: PORT
+    });
+});
+
+// Health check endpoint
+fastify.get('/api/ping', async (request, reply) => {
+    return reply.send({ 
+        ok: true, 
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        service: 'book8-voice-agent'
+    });
+});
+
+// Health check endpoint (alternative)
+fastify.get('/health', async (request, reply) => {
+    return reply.send({ 
+        ok: true, 
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        service: 'book8-voice-agent'
+    });
+});
+
 // Optional: track "first turn" by CallSid to enforce greeting rule
 const seenCallSids = new Set();
 
@@ -965,10 +1006,33 @@ fastify.register(async (fastify) => {
     });
 });
 
-fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
+fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err) => {
     if (err) {
         console.error(err);
         process.exit(1);
     }
-    console.log(`Server is listening on port ${PORT}`);
+    
+    // Log registered routes for debugging
+    try {
+        const routes = await fastify.printRoutes();
+        console.log(`[book8-voice-agent] Server is listening on port ${PORT} (host: 0.0.0.0)`);
+        console.log(`[book8-voice-agent] Base URL: http://0.0.0.0:${PORT}`);
+        console.log(`[book8-voice-agent] Registered routes:`);
+        routes.split('\n').forEach(line => {
+            const trimmed = line.trim();
+            if (trimmed) {
+                console.log(`  ${trimmed}`);
+            }
+        });
+        
+        // Explicitly verify critical routes
+        console.log(`[book8-voice-agent] ✅ POST /api/agent-chat is registered`);
+        console.log(`[book8-voice-agent] ✅ GET /api/ping is registered`);
+        console.log(`[book8-voice-agent] ✅ GET /health is registered`);
+        console.log(`[book8-voice-agent] ✅ GET / is registered`);
+    } catch (routeError) {
+        console.warn('[book8-voice-agent] Could not print routes:', routeError);
+        console.log(`[book8-voice-agent] Server is listening on port ${PORT} (host: 0.0.0.0)`);
+        console.log(`[book8-voice-agent] ✅ POST /api/agent-chat should be available`);
+    }
 });
