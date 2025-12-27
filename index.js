@@ -640,7 +640,13 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       callSid
     });
     
-    return reply.send({ ok: true, reply: replyText, state: next });
+    // Ensure response format matches gateway expectations (include both 'reply' and 'replyText')
+    return reply.send({ 
+        ok: true, 
+        reply: replyText,
+        replyText: replyText, // Alias for gateway compatibility
+        state: next 
+    });
   } catch (err) {
     const responseTime = Date.now() - requestStartTime;
     console.error(`[${requestId}] [agent-chat] ERROR after ${responseTime}ms:`, {
