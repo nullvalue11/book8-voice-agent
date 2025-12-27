@@ -80,26 +80,6 @@ fastify.get('/health', async (request, reply) => {
     });
 });
 
-// Health check endpoint
-fastify.get('/api/ping', async (request, reply) => {
-    return reply.send({ 
-        ok: true, 
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        service: 'book8-voice-agent'
-    });
-});
-
-// Health check endpoint (alternative)
-fastify.get('/health', async (request, reply) => {
-    return reply.send({ 
-        ok: true, 
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        service: 'book8-voice-agent'
-    });
-});
-
 // Optional: track "first turn" by CallSid to enforce greeting rule
 const seenCallSids = new Set();
 
