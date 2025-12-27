@@ -405,12 +405,16 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     // 1) If user asked services:
     if (extracted.intent === "ask_services") {
       try {
-        const serviceNames = services.slice(0, 2).map(s => s?.name).filter(Boolean);
-        if (serviceNames.length > 0) {
-          const short = serviceNames.join(" or ");
-          replyText = `We offer ${short}. Which one would you like?`;
-        } else {
+        if (!Array.isArray(services) || services.length === 0) {
           replyText = `We offer appointments. What would you like to book?`;
+        } else {
+          const serviceNames = services.slice(0, 2).map(s => s?.name).filter(Boolean);
+          if (serviceNames.length > 0) {
+            const short = serviceNames.join(" or ");
+            replyText = `We offer ${short}. Which one would you like?`;
+          } else {
+            replyText = `We offer appointments. What would you like to book?`;
+          }
         }
       } catch (error) {
         console.error(`[${requestId}] [agent-chat] Error formatting services list:`, error);
@@ -420,12 +424,16 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     // 2) If no service selected:
     else if (!next.service) {
       try {
-        const serviceNames = services.slice(0, 2).map(s => s?.name).filter(Boolean);
-        if (serviceNames.length > 0) {
-          const serviceOptions = serviceNames.join(" or ");
-          replyText = `Sure. Do you want ${serviceOptions}?`;
-        } else {
+        if (!Array.isArray(services) || services.length === 0) {
           replyText = `Sure. What type of appointment would you like?`;
+        } else {
+          const serviceNames = services.slice(0, 2).map(s => s?.name).filter(Boolean);
+          if (serviceNames.length > 0) {
+            const serviceOptions = serviceNames.join(" or ");
+            replyText = `Sure. Do you want ${serviceOptions}?`;
+          } else {
+            replyText = `Sure. What type of appointment would you like?`;
+          }
         }
       } catch (error) {
         console.error(`[${requestId}] [agent-chat] Error formatting service options:`, error);
