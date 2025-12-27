@@ -137,8 +137,17 @@ function getServiceDuration(service) {
 
 // Helper function to safely find a service by name
 function findServiceByName(services, serviceName) {
+  // Validate services parameter first
+  if (!services) {
+    console.warn('[findServiceByName] Services parameter is null/undefined');
+    return null;
+  }
+  
   if (!Array.isArray(services) || services.length === 0) {
-    console.warn('[findServiceByName] Services array is empty or invalid');
+    console.warn('[findServiceByName] Services array is empty or invalid:', { 
+      isArray: Array.isArray(services), 
+      length: services?.length 
+    });
     return null;
   }
   
