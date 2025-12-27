@@ -88,9 +88,83 @@ console.log('[book8-voice-agent] Startup configuration:', {
   TEMPERATURE: TEMPERATURE
 });
 
+// Helper function to normalize service duration with safety fallbacks
+function getServiceDuration(service) {
+  if (!service) {
+    console.warn('[getServiceDuration] Service is null/undefined, defaulting to 30 minutes');
+    return 30;
+  }
+  
+  const duration = service.durationMinutes ?? service.duration ?? 30;
+  
+  if (duration !== service.durationMinutes && duration !== service.duration) {
+    console.warn('[getServiceDuration] Service missing duration fields, defaulting to 30 minutes:', {
+      serviceName: service.name,
+      serviceId: service.id,
+      hasDurationMinutes: 'durationMinutes' in service,
+      hasDuration: 'duration' in service
+    });
+  }
+  
+  // Ensure duration is a valid number
+  const numDuration = Number(duration);
+  if (isNaN(numDuration) || numDuration <= 0) {
+    console.warn('[getServiceDuration] Invalid duration value, defaulting to 30 minutes:', {
+      serviceName: service.name,
+      duration: duration,
+      parsed: numDuration
+    });
+    return 30;
+  }
+  
+  return numDuration;
+}
+
+// Helper function to safely find a service by name
+function findServiceByName(services, serviceName) {
+  if (!Array.isArray(services) || services.length === 0) {
+    console.warn('[findServiceByName] Services array is empty or invalid');
+    return null;
+  }
+  
+  if (!serviceName || typeof serviceName !== 'string') {
+    console.warn('[findServiceByName] Service name is invalid:', serviceName);
+    return null;
+  }
+  
+  try {
+    const service = services.find(s => 
+      s && s.name && s.name.toLowerCase().trim() === serviceName.toLowerCase().trim()
+    );
+    return service || null;
+  } catch (error) {
+    console.error('[findServiceByName] Error finding service:', error);
+    return null;
+  }
+}
+
 // Helper functions for booking tools
 async function callCheckAvailability({ date, timezone, durationMinutes }) {
   try {
+    // Validate required fields
+    if (!date || !timezone) {
+      console.error('[callCheckAvailability] Missing required fields:', { date: !!date, timezone: !!timezone });
+      return { available: false, error: 'Missing required availability information' };
+    }
+    
+    // Ensure duration is a valid number
+    const numDuration = Number(durationMinutes);
+    if (isNaN(numDuration) || numDuration <= 0) {
+      console.warn('[callCheckAvailability] Invalid duration, defaulting to 30:', durationMinutes);
+      durationMinutes = 30;
+    }
+    
+    // Ensure BOOK8_AGENT_API_KEY is present
+    if (!BOOK8_AGENT_API_KEY) {
+      console.error('[callCheckAvailability] BOOK8_AGENT_API_KEY is missing');
+      return { available: false, error: 'Agent API key not configured' };
+    }
+    
     const response = await fetch('https://api.book8.com/api/agent/check-availability', {
       method: 'POST',
       headers: {
@@ -98,15 +172,23 @@ async function callCheckAvailability({ date, timezone, durationMinutes }) {
       },
       body: JSON.stringify({
         agentApiKey: BOOK8_AGENT_API_KEY,
-        date,
-        timezone,
-        durationMinutes
+        date: String(date),
+        timezone: String(timezone),
+        durationMinutes: numDuration
       })
     });
-    return await response.json();
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error('[callCheckAvailability] API returned error:', response.status, errorText);
+      return { available: false, error: `API error: ${response.status}` };
+    }
+    
+    const result = await response.json().catch(() => ({ available: false, error: 'Invalid JSON response' }));
+    return result || { available: false, error: 'Empty response' };
   } catch (error) {
     console.error('[callCheckAvailability] Error:', error);
-    return { available: false, error: error.message };
+    return { available: false, error: error.message || 'Availability check failed' };
   }
 }
 
@@ -218,17 +300,29 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     try {
       profile = await getBusinessProfile(businessId);
     } catch (error) {
-      console.error('[agent-chat] Error loading business profile:', error);
-      // Use a minimal fallback profile
+      console.error(`[${requestId}] [agent-chat] Error loading business profile:`, error);
+      // Use a minimal fallback profile with generic service
       profile = {
-        name: businessId,
-        services: [],
-        defaultServices: [],
+        name: businessId || 'this business',
+        services: [{ id: 'generic', name: 'appointment', duration: 30, durationMinutes: 30 }],
+        defaultServices: [{ id: 'generic', name: 'appointment', duration: 30, durationMinutes: 30 }],
         timezone: 'America/Toronto'
       };
+      console.warn(`[${requestId}] [agent-chat] Using fallback profile with generic service`);
     }
     
-    const services = profile.services || profile.defaultServices || [];
+    // Safely extract services with fallback
+    let services = [];
+    try {
+      services = profile.services || profile.defaultServices || [];
+      if (!Array.isArray(services) || services.length === 0) {
+        console.warn(`[${requestId}] [agent-chat] No services found, using generic fallback`);
+        services = [{ id: 'generic', name: 'appointment', duration: 30, durationMinutes: 30 }];
+      }
+    } catch (error) {
+      console.error(`[${requestId}] [agent-chat] Error extracting services:`, error);
+      services = [{ id: 'generic', name: 'appointment', duration: 30, durationMinutes: 30 }];
+    }
 
     // Load per-call state
     const state = getCallState(callSid) || {
@@ -290,13 +384,33 @@ fastify.post('/api/agent-chat', async (request, reply) => {
 
     // 1) If user asked services:
     if (extracted.intent === "ask_services") {
-      const short = services.slice(0, 2).map(s => s.name).join(" or ");
-      replyText = `We offer ${short}. Which one would you like?`;
+      try {
+        const serviceNames = services.slice(0, 2).map(s => s?.name).filter(Boolean);
+        if (serviceNames.length > 0) {
+          const short = serviceNames.join(" or ");
+          replyText = `We offer ${short}. Which one would you like?`;
+        } else {
+          replyText = `We offer appointments. What would you like to book?`;
+        }
+      } catch (error) {
+        console.error(`[${requestId}] [agent-chat] Error formatting services list:`, error);
+        replyText = `We offer appointments. What would you like to book?`;
+      }
     }
     // 2) If no service selected:
     else if (!next.service) {
-      const serviceOptions = services.slice(0, 2).map(s => s.name).join(" or ");
-      replyText = `Sure. Do you want ${serviceOptions}?`;
+      try {
+        const serviceNames = services.slice(0, 2).map(s => s?.name).filter(Boolean);
+        if (serviceNames.length > 0) {
+          const serviceOptions = serviceNames.join(" or ");
+          replyText = `Sure. Do you want ${serviceOptions}?`;
+        } else {
+          replyText = `Sure. What type of appointment would you like?`;
+        }
+      } catch (error) {
+        console.error(`[${requestId}] [agent-chat] Error formatting service options:`, error);
+        replyText = `Sure. What type of appointment would you like?`;
+      }
     }
     // 3) Need date/time:
     else if (!next.date || !next.time) {
@@ -308,23 +422,48 @@ fastify.post('/api/agent-chat', async (request, reply) => {
     }
     // 5) Now you can book:
     else {
-      const serviceDuration = services.find(s => s.name === next.service)?.durationMinutes || 
-                               services.find(s => s.name === next.service)?.duration || 30;
-      const timezone = next.timezone || profile.timezone || 'America/Toronto';
+      let serviceDuration = 30;
+      let timezone = 'America/Toronto';
       
-      // Call check_availability
-      console.log(`[${requestId}] [agent-chat] Calling check_availability:`, {
-        date: next.date,
-        timezone,
-        durationMinutes: serviceDuration,
-        service: next.service
-      });
+      try {
+        // Safely find service and get duration
+        const service = findServiceByName(services, next.service);
+        if (service) {
+          serviceDuration = getServiceDuration(service);
+        } else {
+          console.warn(`[${requestId}] [agent-chat] Service "${next.service}" not found, using default 30 minutes`);
+        }
+        
+        timezone = next.timezone || profile.timezone || 'America/Toronto';
+      } catch (error) {
+        console.error(`[${requestId}] [agent-chat] Error resolving service duration:`, error);
+        // Already using defaults (30 minutes, America/Toronto)
+      }
       
-      const checkResult = await callCheckAvailability({
-        date: next.date,
-        timezone: timezone,
-        durationMinutes: serviceDuration
-      });
+      // Call check_availability with error handling
+      let checkResult = { available: false, error: 'Unknown error' };
+      try {
+        console.log(`[${requestId}] [agent-chat] Calling check_availability:`, {
+          date: next.date,
+          timezone,
+          durationMinutes: serviceDuration,
+          service: next.service
+        });
+        
+        checkResult = await callCheckAvailability({
+          date: next.date,
+          timezone: timezone,
+          durationMinutes: serviceDuration
+        });
+        
+        if (!checkResult || typeof checkResult !== 'object') {
+          console.warn(`[${requestId}] [agent-chat] Invalid check_availability response, defaulting to unavailable`);
+          checkResult = { available: false, error: 'Invalid response' };
+        }
+      } catch (error) {
+        console.error(`[${requestId}] [agent-chat] Error in check_availability:`, error);
+        checkResult = { available: false, error: error.message || 'Check availability failed' };
+      }
       
       console.log(`[${requestId}] [agent-chat] check_availability result:`, {
         available: checkResult?.available,
@@ -351,54 +490,84 @@ fastify.post('/api/agent-chat', async (request, reply) => {
 
       // If availability check succeeded, book the appointment
       if (checkResult && checkResult.available) {
-        console.log(`[${requestId}] [agent-chat] Calling book_appointment:`, {
-          start: `${next.date}T${next.time}`,
-          guestName: next.name,
-          hasEmail: !!next.email,
-          hasPhone: !!next.phone
-        });
+        let bookingResult = { ok: false, error: 'Unknown error' };
         
-        const bookingResult = await callBookAppointment({
-          start: `${next.date}T${next.time}`,
-          guestName: next.name,
-          guestEmail: next.email,
-          guestPhone: next.phone
-        });
-        
-        console.log(`[${requestId}] [agent-chat] book_appointment result:`, {
-          ok: bookingResult?.ok,
-          hasError: !bookingResult || bookingResult.error,
-          resultPreview: JSON.stringify(bookingResult).substring(0, 200)
-        });
+        try {
+          console.log(`[${requestId}] [agent-chat] Calling book_appointment:`, {
+            start: `${next.date}T${next.time}`,
+            guestName: next.name,
+            hasEmail: !!next.email,
+            hasPhone: !!next.phone
+          });
+          
+          bookingResult = await callBookAppointment({
+            start: `${next.date}T${next.time}`,
+            guestName: next.name,
+            guestEmail: next.email,
+            guestPhone: next.phone
+          });
+          
+          if (!bookingResult || typeof bookingResult !== 'object') {
+            console.warn(`[${requestId}] [agent-chat] Invalid book_appointment response`);
+            bookingResult = { ok: false, error: 'Invalid response' };
+          }
+          
+          console.log(`[${requestId}] [agent-chat] book_appointment result:`, {
+            ok: bookingResult?.ok,
+            hasError: !bookingResult || bookingResult.error,
+            resultPreview: JSON.stringify(bookingResult).substring(0, 200)
+          });
+        } catch (error) {
+          console.error(`[${requestId}] [agent-chat] Error in book_appointment:`, error);
+          bookingResult = { ok: false, error: error.message || 'Booking failed' };
+        }
 
         // 2️⃣ Tool event - book_appointment
         if (callSid) {
-          const toolIndex = toolEvents.length;
-          const toolEventId = `${callSid}:tool:book_appointment:${toolIndex}`;
-          toolEvents.push({ eventId: toolEventId, toolName: 'book_appointment' });
-          
-          bestEffortPost(`${CORE_API_URL}/internal/calls/tool`, {
-            eventId: toolEventId,
-            callSid,
-            toolName: 'book_appointment',
-            toolIndex,
-            input: { start: `${next.date}T${next.time}`, guestName: next.name, guestEmail: next.email, guestPhone: next.phone },
-            output: bookingResult,
-            timestamp: new Date().toISOString()
-          }).catch(() => {});
+          try {
+            const toolIndex = toolEvents.length;
+            const toolEventId = `${callSid}:tool:book_appointment:${toolIndex}`;
+            toolEvents.push({ eventId: toolEventId, toolName: 'book_appointment' });
+            
+            bestEffortPost(`${CORE_API_URL}/internal/calls/tool`, {
+              eventId: toolEventId,
+              callSid,
+              toolName: 'book_appointment',
+              toolIndex,
+              input: { start: `${next.date}T${next.time}`, guestName: next.name, guestEmail: next.email, guestPhone: next.phone },
+              output: bookingResult,
+              timestamp: new Date().toISOString()
+            }).catch(() => {});
+          } catch (error) {
+            console.error(`[${requestId}] [agent-chat] Error emitting tool event:`, error);
+            // Continue - tool event is best-effort
+          }
         }
 
         if (bookingResult && bookingResult.ok) {
-          replyText = `Perfect! I've booked ${next.service} on ${next.date} at ${next.time} for ${next.name}. You'll receive a confirmation shortly.`;
-          clearCallState(callSid);
+          try {
+            replyText = `Perfect! I've booked ${next.service || 'your appointment'} on ${next.date} at ${next.time} for ${next.name}. You'll receive a confirmation shortly.`;
+            clearCallState(callSid);
+          } catch (error) {
+            console.error(`[${requestId}] [agent-chat] Error clearing call state:`, error);
+            // Continue with reply text even if state clearing fails
+            replyText = `Perfect! I've booked your appointment on ${next.date} at ${next.time} for ${next.name}. You'll receive a confirmation shortly.`;
+          }
         } else {
-          replyText = `I'm having trouble booking that right now. Please try again or contact us directly.`;
+          replyText = `I had trouble scheduling that, but I can help you try again. Would you like to try a different time?`;
         }
       } else {
-        replyText = `I'm sorry, that time slot isn't available. Would you like to try a different day or time?`;
+        const errorMsg = checkResult?.error ? ` (${checkResult.error})` : '';
+        replyText = `I'm sorry, that time slot isn't available${errorMsg}. Would you like to try a different day or time?`;
       }
     }
 
+    // Ensure replyText is always set (safety fallback)
+    if (!replyText || replyText.trim().length === 0) {
+      console.warn(`[${requestId}] [agent-chat] replyText is empty, using fallback message`);
+      replyText = `I had trouble processing that, but I can help you try again. What would you like to do?`;
+    }
+    
     // 1️⃣ Transcript event - agent reply
     if (callSid && replyText) {
       bestEffortPost(`${CORE_API_URL}/internal/calls/transcript`, {

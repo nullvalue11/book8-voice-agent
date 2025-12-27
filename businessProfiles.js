@@ -1,6 +1,6 @@
 // businessProfiles.js
 
-const CORE_API_URL = process.env.CORE_API_URL;
+const CORE_API_URL = process.env.CORE_API_URL || process.env.BOOK8_CORE_API_URL || 'https://book8-core-api.onrender.com';
 
 export const CATEGORY_TEMPLATES = {
   fitness: {
