@@ -3,7 +3,10 @@
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 export async function extractFields({ businessName, services, userText }) {
-  const serviceNames = (services || []).map(s => s.name);
+  // Safely extract service names with null checks
+  const serviceNames = (Array.isArray(services) ? services : [])
+    .map(s => s && typeof s === 'object' && s.name ? s.name : null)
+    .filter(Boolean);
 
   const schema = {
     type: "object",
