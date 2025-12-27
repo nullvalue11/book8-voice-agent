@@ -76,6 +76,18 @@ function getTurnIndex(callSid) {
 // Get Core API URL for internal endpoints
 const CORE_API_URL = process.env.CORE_API_URL || process.env.BOOK8_CORE_API_URL || 'https://book8-core-api.onrender.com';
 
+// Log environment configuration at startup
+console.log('[book8-voice-agent] Startup configuration:', {
+  PORT: PORT,
+  DEFAULT_BUSINESS_HANDLE: DEFAULT_BUSINESS_HANDLE,
+  CORE_API_URL: CORE_API_URL,
+  REALTIME_MODEL: REALTIME_MODEL,
+  hasOpenAIKey: !!OPENAI_API_KEY,
+  hasBook8AgentKey: !!BOOK8_AGENT_API_KEY,
+  VOICE: VOICE,
+  TEMPERATURE: TEMPERATURE
+});
+
 // Helper functions for booking tools
 async function callCheckAvailability({ date, timezone, durationMinutes }) {
   try {
@@ -138,10 +150,30 @@ fastify.get('/health', async (request, reply) => {
  * }
  */
 fastify.post('/api/agent-chat', async (request, reply) => {
+  const requestStartTime = Date.now();
+  const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  console.log(`[${requestId}] [agent-chat] Request received:`, {
+    method: request.method,
+    url: request.url,
+    headers: {
+      'content-type': request.headers['content-type'],
+      'user-agent': request.headers['user-agent']
+    },
+    body: {
+      businessId: request.body?.businessId,
+      callSid: request.body?.callSid,
+      hasText: !!request.body?.text,
+      hasMessages: Array.isArray(request.body?.messages) && request.body.messages.length > 0,
+      textLength: request.body?.text?.length || 0
+    }
+  });
+  
   try {
     const { businessId, callSid, text, messages } = request.body;
 
     if (!businessId) {
+      console.warn(`[${requestId}] [agent-chat] Missing businessId`);
       return reply.status(400).send({ ok: false, error: "businessId is required" });
     }
 
@@ -152,8 +184,19 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       userText = lastMessage.content || lastMessage.text || '';
     }
     if (!userText) {
+      console.warn(`[${requestId}] [agent-chat] Missing user text`, {
+        hasText: !!text,
+        messagesLength: Array.isArray(messages) ? messages.length : 0
+      });
       return reply.status(400).send({ ok: false, error: "text or messages with content is required" });
     }
+    
+    console.log(`[${requestId}] [agent-chat] Processing:`, {
+      businessId,
+      callSid,
+      userTextLength: userText.length,
+      userTextPreview: userText.substring(0, 100)
+    });
 
     // Get turn index for this call
     const turnIndex = getTurnIndex(callSid);
@@ -270,10 +313,23 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       const timezone = next.timezone || profile.timezone || 'America/Toronto';
       
       // Call check_availability
+      console.log(`[${requestId}] [agent-chat] Calling check_availability:`, {
+        date: next.date,
+        timezone,
+        durationMinutes: serviceDuration,
+        service: next.service
+      });
+      
       const checkResult = await callCheckAvailability({
         date: next.date,
         timezone: timezone,
         durationMinutes: serviceDuration
+      });
+      
+      console.log(`[${requestId}] [agent-chat] check_availability result:`, {
+        available: checkResult?.available,
+        hasError: !checkResult || checkResult.error,
+        resultPreview: JSON.stringify(checkResult).substring(0, 200)
       });
 
       // 2️⃣ Tool event - check_availability
@@ -295,11 +351,24 @@ fastify.post('/api/agent-chat', async (request, reply) => {
 
       // If availability check succeeded, book the appointment
       if (checkResult && checkResult.available) {
+        console.log(`[${requestId}] [agent-chat] Calling book_appointment:`, {
+          start: `${next.date}T${next.time}`,
+          guestName: next.name,
+          hasEmail: !!next.email,
+          hasPhone: !!next.phone
+        });
+        
         const bookingResult = await callBookAppointment({
           start: `${next.date}T${next.time}`,
           guestName: next.name,
           guestEmail: next.email,
           guestPhone: next.phone
+        });
+        
+        console.log(`[${requestId}] [agent-chat] book_appointment result:`, {
+          ok: bookingResult?.ok,
+          hasError: !bookingResult || bookingResult.error,
+          resultPreview: JSON.stringify(bookingResult).substring(0, 200)
         });
 
         // 2️⃣ Tool event - book_appointment
@@ -352,10 +421,27 @@ fastify.post('/api/agent-chat', async (request, reply) => {
       }).catch(() => {});
     }
     
+    const responseTime = Date.now() - requestStartTime;
+    console.log(`[${requestId}] [agent-chat] Success response:`, {
+      status: 200,
+      responseTime: `${responseTime}ms`,
+      replyLength: replyText.length,
+      hasState: !!next,
+      callSid
+    });
+    
     return reply.send({ ok: true, reply: replyText, state: next });
   } catch (err) {
-    console.error('[book8-voice-agent] /api/agent-chat error:', err);
-    console.error('[book8-voice-agent] Error stack:', err.stack);
+    const responseTime = Date.now() - requestStartTime;
+    console.error(`[${requestId}] [agent-chat] ERROR after ${responseTime}ms:`, {
+      error: err.message,
+      stack: err.stack,
+      requestBody: {
+        businessId: request.body?.businessId,
+        callSid: request.body?.callSid,
+        hasText: !!request.body?.text
+      }
+    });
     
     // Return a user-friendly error message instead of crashing
     const errorReply = "I'm having trouble accessing the scheduling system right now. Please try again later.";
